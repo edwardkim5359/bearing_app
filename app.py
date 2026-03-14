@@ -4,64 +4,193 @@ from PIL import Image
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
+import requests
+import base64
 
-# 1. API 키 및 모델 설정
-# 클라우드 비밀 금고(secrets)에서 GEMINI_API_KEY라는 이름의 열쇠를 가져옵니다.
+# --- 1. 기본 설정 ---
 GOOGLE_API_KEY = st.secrets["GEMINI_API_KEY"]
-MODEL_NAME = 'models/gemini-2.5-flash'
+IMGBB_API_KEY = st.secrets["IMGBB_API_KEY"]
 genai.configure(api_key=GOOGLE_API_KEY)
+MODEL_NAME = 'models/gemini-2.5-flash'
 
-# 2. 클라우드용 구글 시트 연결 함수 ⭐
-def save_to_google_sheet(p_name, brand, qty, note):
+SHEET_URL = "https://docs.google.com/spreadsheets/d/1cPeCqb2_Bq5ddG_UmS8L0wcR-8oNI3m7-nNC-dTDXBI/edit#gid=0"
+
+# --- 2. 구글 시트 연결 ---
+@st.cache_resource
+def get_gspread_client():
+    scopes = ['https://www.googleapis.com/auth/spreadsheets']
+    secret_dict = dict(st.secrets["gcp_service_account"])
+    creds = Credentials.from_service_account_info(secret_dict, scopes=scopes)
+    return gspread.authorize(creds)
+
+# --- 3. ImgBB 초고속 사진 업로드 함수 ---
+def upload_to_imgbb(file_obj):
+    url = "https://api.imgbb.com/1/upload"
+    payload = {
+        "key": IMGBB_API_KEY,
+        "image": base64.b64encode(file_obj.getvalue()).decode("utf-8")
+    }
+    res = requests.post(url, data=payload)
+    if res.status_code == 200:
+        return res.json()["data"]["url"]
+    return None
+
+# --- 4. 상태 관리 ---
+if 'cart' not in st.session_state: st.session_state.cart = []
+if 'reset_key' not in st.session_state: st.session_state.reset_key = 0
+if 'success_msg' not in st.session_state: st.session_state.success_msg = ""
+if 'ai_done' not in st.session_state: st.session_state.ai_done = False
+if 'temp_data' not in st.session_state: st.session_state.temp_data = {}
+
+# --- 5. 앱 화면 구성 ---
+st.set_page_config(page_title="Surplus Bearing Uploader", layout="centered")
+st.header("Surplus Bearing Uploader")
+
+if st.session_state.success_msg:
+    st.success(st.session_state.success_msg)
+    st.session_state.success_msg = ""
+
+tab1, tab2 = st.tabs(["🤖 신규 베어링 등록 (공급자용)", "📸 기존 재고 사진 매칭 (내 재고용)"])
+
+# ==========================================
+# [탭 1] 신규 베어링 등록 -> 구글 시트 "첫 번째 탭" 저장
+# ==========================================
+with tab1:
+    st.subheader("1. 사진 업로드 및 판독")
+    
+    current_key = str(st.session_state.reset_key)
+    uploaded_files = st.file_uploader("다각도 사진 업로드 (여러 장 가능)", type=['jpg', 'jpeg', 'png'], accept_multiple_files=True, key=f"files_{current_key}")
+    
+    if not st.session_state.ai_done:
+        if st.button("🤖 AI 분석 시작", use_container_width=True):
+            if uploaded_files:
+                with st.spinner("AI가 품번/브랜드/원산지를 판독 중입니다... 🧐"):
+                    try:
+                        img = Image.open(uploaded_files[0])
+                        model = genai.GenerativeModel(MODEL_NAME)
+                        prompt = "이 사진 속 베어링의 품번(Part Number), 브랜드(Brand), 원산지(Origin/Made in)를 찾아서 '품번: [값], 브랜드: [값], 원산지: [값]' 형식으로 답해줘. 안 보이면 '미확인'으로 해줘."
+                        response = model.generate_content([prompt, img])
+                        
+                        text = response.text.replace('\n', ',')
+                        parts = [p.strip() for p in text.split(',') if ':' in p]
+                        
+                        p_id, b_name, origin = "미확인", "미확인", "미확인"
+                        for p in parts:
+                            if "품번" in p: p_id = p.split(':')[-1].strip()
+                            elif "브랜드" in p: b_name = p.split(':')[-1].strip()
+                            elif "원산지" in p: origin = p.split(':')[-1].strip()
+                        
+                        st.session_state.temp_data = {"품번": p_id, "브랜드": b_name, "원산지": origin}
+                        st.session_state.ai_done = True
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"분석 오류: {e}")
+            else:
+                st.warning("사진을 먼저 올려주세요!")
+                
+    if st.session_state.ai_done:
+        st.info("💡 AI 판독 결과입니다. 틀린 글자가 있다면 직접 수정해 주세요!")
+        col1, col2, col3 = st.columns(3)
+        with col1: confirm_p_id = st.text_input("품번 (Part No.)", value=st.session_state.temp_data.get("품번", ""))
+        with col2: confirm_b_name = st.text_input("브랜드 (Brand)", value=st.session_state.temp_data.get("브랜드", ""))
+        with col3: confirm_origin = st.text_input("원산지 (Origin)", value=st.session_state.temp_data.get("원산지", ""))
+            
+        col4, col5 = st.columns([1, 2])
+        with col4: quantity = st.number_input("입고 수량", min_value=1, value=1)
+        with col5: condition = st.text_input("제품상태 (예: A급 신품, 박스없음)", placeholder="A급 신품")
+
+        if st.button("✅ 정보 확정 및 장바구니 담기", type="primary", use_container_width=True):
+            with st.spinner("사진을 클라우드에 저장하는 중..."):
+                links = []
+                for f in uploaded_files:
+                    link = upload_to_imgbb(f)
+                    if link: links.append(link)
+                links_str = ",\n".join(links)
+
+                st.session_state.cart.append({
+                    "품번": confirm_p_id, "브랜드": confirm_b_name, "원산지": confirm_origin,
+                    "수량": quantity, "제품상태": condition, "사진링크": links_str
+                })
+                
+                st.session_state.success_msg = f"✅ [{confirm_p_id}] 장바구니 담기 완료! 다음 제품을 올려주세요."
+                st.session_state.ai_done = False
+                st.session_state.temp_data = {}
+                st.session_state.reset_key += 1
+                st.rerun()
+                
+        if st.button("취소하고 다시 올리기", use_container_width=True):
+            st.session_state.ai_done = False
+            st.session_state.temp_data = {}
+            st.rerun()
+
+    st.divider()
+    
+    st.subheader(f"🛒 장바구니 대기열 ({len(st.session_state.cart)}개)")
+    if len(st.session_state.cart) > 0:
+        for i, item in enumerate(st.session_state.cart):
+            st.write(f"**{i+1}. {item['품번']}** | {item['브랜드']} | {item['원산지']} | {item['수량']}개 | {item['제품상태']} | 사진 {len(item['사진링크'].split(','))}장")
+
+        if st.button("🚀 전체 구글 시트에 등록", type="primary", use_container_width=True):
+            with st.spinner("구글 시트에 기록 중..."):
+                try:
+                    client = get_gspread_client()
+                    # ⭐ 0번(첫 번째) 시트 탭에 저장합니다!
+                    worksheet = client.open_by_url(SHEET_URL).get_worksheet(0)
+                    rows_to_insert = []
+                    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    for item in st.session_state.cart:
+                        rows_to_insert.append([now, item["품번"], item["브랜드"], item["원산지"], item["수량"], item["제품상태"], item["사진링크"]])
+                    
+                    worksheet.append_rows(rows_to_insert)
+                    st.session_state.cart = []
+                    st.success("🎉 시트 등록 완료!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"저장 실패: {e}")
+
+# ==========================================
+# [탭 2] 기존 재고 매칭 -> 구글 시트 "두 번째 탭" 연동
+# ==========================================
+with tab2:
+    st.subheader("내 재고 장부에 사진 매칭하기")
+    st.info("두 번째 시트 탭에 입력된 마스터 리스트에서 품번을 검색합니다.")
+    
     try:
-        scopes = ['https://www.googleapis.com/auth/spreadsheets']
-        # [변경됨] 파일 대신 스트림릿 클라우드의 '비밀 금고(secrets)'에서 열쇠를 가져옵니다.
-        secret_dict = dict(st.secrets["gcp_service_account"])
-        creds = Credentials.from_service_account_info(secret_dict, scopes=scopes)
-        client = gspread.authorize(creds)
-        
-        # 사원님의 시트 주소
-        sheet_url = "https://docs.google.com/spreadsheets/d/1cPeCqb2_Bq5ddG_UmS8L0wcR-8oNI3m7-nNC-dTDXBI/edit#gid=0" 
-        sh = client.open_by_url(sheet_url)
-        worksheet = sh.get_worksheet(0)
-        
-        now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        worksheet.append_row([now, p_name, brand, qty, note])
-        return True
+        client = get_gspread_client()
+        # ⭐ 1번(두 번째) 시트 탭에서 데이터를 읽어옵니다!
+        worksheet_master = client.open_by_url(SHEET_URL).get_worksheet(1)
+        all_part_numbers = worksheet_master.col_values(2)[1:] 
+        valid_part_numbers = sorted(list(set([p for p in all_part_numbers if p.strip()])))
     except Exception as e:
-        st.error(f"시트 저장 실패: {e}")
-        return False
+        st.error("마스터 시트를 불러오는 데 실패했습니다. 두 번째 시트 탭이 만들어져 있는지 확인해 주세요!")
+        valid_part_numbers = []
 
-# 3. 앱 화면 구성
-st.set_page_config(page_title="베어링 재고 자동 장부", layout="centered")
-st.title("📱 베어링 자동 재고 장부 (Web)")
-st.success("클라우드 엔진 가동 준비 완료!")
-
-uploaded_file = st.file_uploader("베어링 사진 업로드", type=['jpg', 'jpeg', 'png'])
-quantity = st.number_input("입고 수량", min_value=1, value=1)
-note = st.text_input("특이사항")
-
-if st.button("AI 분석 및 장부 기록", use_container_width=True):
-    if uploaded_file is not None:
-        try:
-            with st.spinner('AI 분석 및 장부 기록 중...'):
-                img = Image.open(uploaded_file)
-                model = genai.GenerativeModel(MODEL_NAME)
-                
-                prompt = "이 사진 속 베어링의 품번(Part Number)과 브랜드(Brand)를 찾아서 '품번: [값], 브랜드: [값]' 형식으로 답해줘."
-                response = model.generate_content([prompt, img])
-                result_text = response.text
-                
-                lines = result_text.replace('\n', ',').split(',')
-                p_id = lines[0].split(':')[-1].strip() if len(lines) > 0 else "미확인"
-                b_name = lines[1].split(':')[-1].strip() if len(lines) > 1 else "미확인"
-
-                if save_to_google_sheet(p_id, b_name, quantity, note):
-                    st.balloons()
-                    st.success(f"✅ 장부 기록 완료! (품번: {p_id} / {quantity}개)")
-                    st.code(f"분석 결과: {result_text}")
-                
-        except Exception as e:
-            st.error(f"오류 발생: {e}")
+    if valid_part_numbers:
+        search_part = st.selectbox("품번 검색 및 선택", options=["-- 품번을 선택하세요 --"] + valid_part_numbers)
+        
+        if search_part != "-- 품번을 선택하세요 --":
+            match_files = st.file_uploader(f"[{search_part}] 제품 사진 업로드", type=['jpg', 'jpeg', 'png'], accept_multiple_files=True, key="match_files")
+            
+            if st.button("📸 사진 매칭 및 시트 덮어쓰기", type="primary", use_container_width=True):
+                if match_files:
+                    with st.spinner("사진 업로드 및 시트 업데이트 중... 🚀"):
+                        try:
+                            links = []
+                            for f in match_files:
+                                link = upload_to_imgbb(f)
+                                if link: links.append(link)
+                            links_str = ",\n".join(links)
+                            
+                            # ⭐ 1번(두 번째) 시트 탭에서 품번을 찾고 덮어씁니다!
+                            cell = worksheet_master.find(search_part, in_column=2)
+                            if cell:
+                                worksheet_master.update_cell(cell.row, 7, links_str)
+                                st.success(f"✅ [{search_part}] 사진 매칭 완료! 내 재고 시트에 즉시 반영되었습니다.")
+                            else:
+                                st.error("해당 품번을 시트에서 찾을 수 없습니다.")
+                        except Exception as e:
+                            st.error(f"업데이트 오류: {e}")
+                else:
+                    st.warning("사진을 올려주세요!")
     else:
-        st.warning("사진을 올려주세요.")
+        st.write("두 번째 시트 탭에 등록된 기존 품번이 없습니다. 데이터를 먼저 넣어주세요!")
