@@ -32,8 +32,8 @@ def load_data():
             if row[1].strip(): 
                 cleaned_data.append(row)
         return cleaned_data
-    except Exception as e:
-        st.error("데이터를 불러오는 중 문제가 발생했습니다.")
+except Exception as e:
+        st.error(f"데이터를 불러오는 중 문제가 발생했습니다: {e}") # ⭐ 끝에 {e} 추가!
         return []
 
 # --- 4. 고객용 장바구니 메모리 ---
