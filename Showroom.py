@@ -2,7 +2,6 @@ import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
-import pandas as pd
 
 # --- 1. 기본 설정 ---
 st.set_page_config(page_title="Surplus Bearing Showroom", layout="wide", initial_sidebar_state="expanded")
@@ -12,12 +11,12 @@ SHEET_URL = "https://docs.google.com/spreadsheets/d/1cPeCqb2_Bq5ddG_UmS8L0wcR-8o
 # --- 2. 구글 시트 연결 (읽기 & 쓰기 권한) ---
 @st.cache_resource
 def get_gspread_client():
-    scopes = ['https://www.googleapis.com/auth/spreadsheets'] # ⭐ 견적서를 쓰기 위해 쓰기 권한 부여
+    scopes = ['https://www.googleapis.com/auth/spreadsheets'] 
     secret_dict = dict(st.secrets["gcp_service_account"])
     creds = Credentials.from_service_account_info(secret_dict, scopes=scopes)
     return gspread.authorize(creds)
 
-# --- 3. 데이터 초고속 불러오기 (10분 캐싱) ---
+# --- 3. 데이터 초고속 불러오기 (10분 캐싱 & 에러 추적) ---
 @st.cache_data(ttl=600)
 def load_data():
     try:
@@ -28,12 +27,14 @@ def load_data():
         
         cleaned_data = []
         for row in all_data:
-            if len(row) < 7: row += [""] * (7 - len(row))
+            if len(row) < 7: 
+                row += [""] * (7 - len(row))
             if row[1].strip(): 
                 cleaned_data.append(row)
         return cleaned_data
-except Exception as e:
-        st.error(f"데이터를 불러오는 중 문제가 발생했습니다: {e}") # ⭐ 끝에 {e} 추가!
+    # ⭐ 에러의 진짜 원인을 화면에 출력해 주는 마법의 코드
+    except Exception as e:
+        st.error(f"데이터를 불러오는 중 문제가 발생했습니다: {e}")
         return []
 
 # --- 4. 고객용 장바구니 메모리 ---
@@ -46,7 +47,7 @@ st.markdown("전 세계의 우수한 잉여 베어링 재고를 한눈에 확인
 
 if st.session_state.inquiry_success:
     st.success("🎉 견적 문의가 성공적으로 접수되었습니다! 담당자가 곧 연락드리겠습니다.")
-    st.session_state.inquiry_success = False # 메시지 띄우고 초기화
+    st.session_state.inquiry_success = False
 
 items = load_data()
 
@@ -81,61 +82,4 @@ else:
             st.text(f"수량: {qty}개")
             
             if len(img_links) > 1:
-                st.info(f"📸 다각도 사진 {len(img_links)}장 (상세 문의)")
-            
-            if st.button("🛒 장바구니 담기", key=f"btn_{i}_{p_id}", use_container_width=True):
-                st.session_state.customer_cart.append(p_id)
-                st.toast(f"[{p_id}] 장바구니에 담겼습니다! 💖")
-            st.write("---")
-
-# --- [사이드바] 견적 장바구니 & 발송 폼 ⭐ ---
-with st.sidebar:
-    st.header("🛒 내 견적 바구니")
-    
-    if len(st.session_state.customer_cart) > 0:
-        unique_cart = list(set(st.session_state.customer_cart))
-        
-        # 담은 목록 보여주기
-        for p in unique_cart:
-            st.write(f"✔️ {p}")
-        st.write(f"**총 {len(unique_cart)}개 품목**")
-        
-        if st.button("🗑️ 바구니 비우기"):
-            st.session_state.customer_cart = []
-            st.rerun()
-            
-        st.divider()
-        
-        # 견적 문의 입력 폼
-        st.subheader("✉️ 견적 문의하기")
-        with st.form("inquiry_form"):
-            buyer_name = st.text_input("회사명 / 담당자명 (필수)")
-            buyer_contact = st.text_input("이메일 또는 연락처 (필수)")
-            buyer_msg = st.text_area("남기실 말씀 (선택)", placeholder="수량이나 배송 관련 등 추가 문의사항을 적어주세요.")
-            
-            submit_btn = st.form_submit_button("🚀 이 목록으로 견적 발송", type="primary", use_container_width=True)
-            
-            if submit_btn:
-                if not buyer_name or not buyer_contact:
-                    st.error("회사명과 연락처를 꼭 입력해 주세요!")
-                else:
-                    with st.spinner("견적 문의를 전송하는 중입니다..."):
-                        try:
-                            # 3번째 시트(인덱스 2)에 문의 내역 저장!
-                            client = get_gspread_client()
-                            worksheet_inquiry = client.open_by_url(SHEET_URL).get_worksheet(2)
-                            
-                            now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                            items_str = ", ".join(unique_cart) # 장바구니 품목을 쉼표로 묶기
-                            
-                            worksheet_inquiry.append_row([now, buyer_name, buyer_contact, items_str, buyer_msg])
-                            
-                            # 성공 시 장바구니 비우고 성공 메시지 띄우기
-                            st.session_state.customer_cart = []
-                            st.session_state.inquiry_success = True
-                            st.rerun()
-                            
-                        except Exception as e:
-                            st.error(f"전송 실패: 구글 시트 3번째 탭(견적문의함)이 만들어져 있는지 확인해주세요! ({e})")
-    else:
-        st.info("원하시는 베어링을 장바구니에 담아주세요.")
+                st.info(f"📸 다각도 사진 {len(img_links)}장 (상세
