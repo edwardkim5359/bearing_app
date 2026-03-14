@@ -3,12 +3,12 @@ import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
 
-# --- 1. 기본 설정 ---
+# --- 1. 기본 설정 (넓은 화면 유지) ---
 st.set_page_config(page_title="Surplus Bearing Showroom", layout="wide", initial_sidebar_state="expanded")
 
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1cPeCqb2_Bq5ddG_UmS8L0wcR-8oNI3m7-nNC-dTDXBI/edit#gid=0"
 
-# --- 2. 구글 시트 연결 (읽기 & 쓰기 권한) ---
+# --- 2. 구글 시트 연결 ---
 @st.cache_resource
 def get_gspread_client():
     scopes = ['https://www.googleapis.com/auth/spreadsheets'] 
@@ -16,7 +16,7 @@ def get_gspread_client():
     creds = Credentials.from_service_account_info(secret_dict, scopes=scopes)
     return gspread.authorize(creds)
 
-# --- 3. 데이터 초고속 불러오기 (10분 캐싱 & 에러 추적) ---
+# --- 3. 데이터 불러오기 (캐싱) ---
 @st.cache_data(ttl=600)
 def load_data():
     try:
@@ -32,7 +32,6 @@ def load_data():
             if row[1].strip(): 
                 cleaned_data.append(row)
         return cleaned_data
-    # ⭐ 에러의 진짜 원인을 화면에 출력해 주는 마법의 코드
     except Exception as e:
         st.error(f"데이터를 불러오는 중 문제가 발생했습니다: {e}")
         return []
@@ -43,7 +42,7 @@ if 'inquiry_success' not in st.session_state: st.session_state.inquiry_success =
 
 # --- 5. 화면 구성 ---
 st.title("⚙️ Surplus Bearing Showroom")
-st.markdown("전 세계의 우수한 잉여 베어링 재고를 한눈에 확인하세요.")
+st.markdown("전 세계의 우수한 잉여 베어링 재고를 초고속으로 검색하세요.")
 
 if st.session_state.inquiry_success:
     st.success("🎉 견적 문의가 성공적으로 접수되었습니다! 담당자가 곧 연락드리겠습니다.")
@@ -54,7 +53,7 @@ items = load_data()
 if not items:
     st.info("현재 등록된 재고가 없습니다.")
 else:
-    # --- [상단] 검색 필터 ---
+    # --- [상단] 통합 검색 필터 ---
     search_query = st.text_input("🔍 품번 또는 브랜드로 검색해보세요", placeholder="예: 6204, NSK, JAPAN...")
     
     filtered_items = []
@@ -66,28 +65,50 @@ else:
     st.write(f"총 **{len(filtered_items)}**개의 상품이 있습니다.")
     st.divider()
 
-    # --- [메인] 쇼핑몰 바둑판(Grid) 갤러리 ---
-    cols = st.columns(4)
+    # --- [메인] 초고속 리스트 뷰 (List View) ⭐ ---
+    # 표의 제목줄(헤더) 만들기
+    header_col1, header_col2, header_col3, header_col4, header_col5 = st.columns([2, 2, 2, 1.5, 1.5])
+    with header_col1: st.markdown("**품번 (Part No.)**")
+    with header_col2: st.markdown("**브랜드 / 원산지**")
+    with header_col3: st.markdown("**상태 / 수량**")
+    with header_col4: st.markdown("**제품 사진**")
+    with header_col5: st.markdown("**견적 담기**")
+    st.divider()
+
+    # 리스트 데이터 뿌리기
     for i, item in enumerate(filtered_items):
         date, p_id, b_name, origin, qty, condition, links_str = item
         
         img_links = [link.strip() for link in links_str.split(',') if link.strip()]
-        thumbnail = img_links[0] if img_links else "https://via.placeholder.com/300x200?text=No+Image"
-
-        with cols[i % 4]:
-            st.image(thumbnail, use_container_width=True)
-            st.subheader(f"{p_id}")
-            st.caption(f"🏢 {b_name} | 🌍 {origin}")
-            st.text(f"상태: {condition}")
-            st.text(f"수량: {qty}개")
+        
+        # 5칸으로 나누어서 정보 배치
+        col1, col2, col3, col4, col5 = st.columns([2, 2, 2, 1.5, 1.5])
+        
+        with col1:
+            st.write(f"**{p_id}**")
+        with col2:
+            st.write(f"{b_name} / {origin}")
+        with col3:
+            st.write(f"{condition} ({qty}개)")
             
-            if len(img_links) > 1:
-                st.info(f"📸 다각도 사진 {len(img_links)}장 (상세 문의)")
-            
-            if st.button("🛒 장바구니 담기", key=f"btn_{i}_{p_id}", use_container_width=True):
+        with col4:
+            # 사진이 있으면 '팝업(Popover)' 버튼을 생성!
+            if img_links:
+                with st.popover("📸 사진 보기"):
+                    # 팝업 창 안에서 사진들을 보여줍니다.
+                    for img in img_links:
+                        st.image(img, use_container_width=True)
+            else:
+                st.write("사진 없음")
+                
+        with col5:
+            # 장바구니 버튼
+            if st.button("🛒 담기", key=f"btn_{i}_{p_id}"):
                 st.session_state.customer_cart.append(p_id)
                 st.toast(f"[{p_id}] 장바구니에 담겼습니다! 💖")
-            st.write("---")
+                
+        # 줄 구분선 (옅은 회색 선)
+        st.markdown("<hr style='margin: 0px; border-top: 1px solid #ddd;'>", unsafe_allow_html=True)
 
 # --- [사이드바] 견적 장바구니 & 발송 폼 ---
 with st.sidebar:
