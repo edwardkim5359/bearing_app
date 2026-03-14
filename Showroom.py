@@ -82,4 +82,57 @@ else:
             st.text(f"수량: {qty}개")
             
             if len(img_links) > 1:
-                st.info(f"📸 다각도 사진 {len(img_links)}장 (상세
+                st.info(f"📸 다각도 사진 {len(img_links)}장 (상세 문의)")
+            
+            if st.button("🛒 장바구니 담기", key=f"btn_{i}_{p_id}", use_container_width=True):
+                st.session_state.customer_cart.append(p_id)
+                st.toast(f"[{p_id}] 장바구니에 담겼습니다! 💖")
+            st.write("---")
+
+# --- [사이드바] 견적 장바구니 & 발송 폼 ---
+with st.sidebar:
+    st.header("🛒 내 견적 바구니")
+    
+    if len(st.session_state.customer_cart) > 0:
+        unique_cart = list(set(st.session_state.customer_cart))
+        
+        for p in unique_cart:
+            st.write(f"✔️ {p}")
+        st.write(f"**총 {len(unique_cart)}개 품목**")
+        
+        if st.button("🗑️ 바구니 비우기"):
+            st.session_state.customer_cart = []
+            st.rerun()
+            
+        st.divider()
+        
+        st.subheader("✉️ 견적 문의하기")
+        with st.form("inquiry_form"):
+            buyer_name = st.text_input("회사명 / 담당자명 (필수)")
+            buyer_contact = st.text_input("이메일 또는 연락처 (필수)")
+            buyer_msg = st.text_area("남기실 말씀 (선택)", placeholder="수량이나 배송 관련 등 추가 문의사항을 적어주세요.")
+            
+            submit_btn = st.form_submit_button("🚀 이 목록으로 견적 발송", type="primary", use_container_width=True)
+            
+            if submit_btn:
+                if not buyer_name or not buyer_contact:
+                    st.error("회사명과 연락처를 꼭 입력해 주세요!")
+                else:
+                    with st.spinner("견적 문의를 전송하는 중입니다..."):
+                        try:
+                            client = get_gspread_client()
+                            worksheet_inquiry = client.open_by_url(SHEET_URL).get_worksheet(2)
+                            
+                            now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                            items_str = ", ".join(unique_cart) 
+                            
+                            worksheet_inquiry.append_row([now, buyer_name, buyer_contact, items_str, buyer_msg])
+                            
+                            st.session_state.customer_cart = []
+                            st.session_state.inquiry_success = True
+                            st.rerun()
+                            
+                        except Exception as e:
+                            st.error(f"전송 실패: 구글 시트 3번째 탭(견적문의함)이 만들어져 있는지 확인해주세요! ({e})")
+    else:
+        st.info("원하시는 베어링을 장바구니에 담아주세요.")
