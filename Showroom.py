@@ -3,8 +3,8 @@ import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
 
-# --- 1. 기본 설정 (넓은 화면 유지) ---
-st.set_page_config(page_title="Surplus Bearing Showroom", layout="wide", initial_sidebar_state="expanded")
+# --- 1. 기본 설정 ---
+st.set_page_config(page_title="Surplus Bearings Warehouse", layout="wide", initial_sidebar_state="expanded")
 
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1cPeCqb2_Bq5ddG_UmS8L0wcR-8oNI3m7-nNC-dTDXBI/edit#gid=0"
 
@@ -37,12 +37,14 @@ def load_data():
         return []
 
 # --- 4. 고객용 장바구니 메모리 ---
-if 'customer_cart' not in st.session_state: st.session_state.customer_cart = []
-if 'inquiry_success' not in st.session_state: st.session_state.inquiry_success = False
+if 'customer_cart' not in st.session_state or isinstance(st.session_state.customer_cart, list): 
+    st.session_state.customer_cart = {} 
+if 'inquiry_success' not in st.session_state: 
+    st.session_state.inquiry_success = False
 
 # --- 5. 화면 구성 ---
-st.title("⚙️ Surplus Bearing Showroom")
-st.markdown("전 세계의 우수한 잉여 베어링 재고를 초고속으로 검색하세요.")
+st.title("⚙️ Surplus Bearings Warehouse")
+st.markdown("전 세계의 우수한 잉여 베어링 재고를 초고속으로 검색하고 견적을 요청하세요.")
 
 if st.session_state.inquiry_success:
     st.success("🎉 견적 문의가 성공적으로 접수되었습니다! 담당자가 곧 연락드리겠습니다.")
@@ -54,7 +56,7 @@ if not items:
     st.info("현재 등록된 재고가 없습니다.")
 else:
     # --- [상단] 통합 검색 필터 ---
-    search_query = st.text_input("🔍 품번 또는 브랜드로 검색해보세요", placeholder="예: 6204, NSK, JAPAN...")
+    search_query = st.text_input("🔍 브랜드, 품번 또는 원산지로 검색해보세요", placeholder="예: NSK, 6204, JAPAN...")
     
     filtered_items = []
     for item in items:
@@ -65,95 +67,97 @@ else:
     st.write(f"총 **{len(filtered_items)}**개의 상품이 있습니다.")
     st.divider()
 
-    # --- [메인] 초고속 리스트 뷰 (List View) ⭐ ---
-    # 표의 제목줄(헤더) 만들기
-    header_col1, header_col2, header_col3, header_col4, header_col5 = st.columns([2, 2, 2, 1.5, 1.5])
-    with header_col1: st.markdown("**품번 (Part No.)**")
-    with header_col2: st.markdown("**브랜드 / 원산지**")
-    with header_col3: st.markdown("**상태 / 수량**")
-    with header_col4: st.markdown("**제품 사진**")
-    with header_col5: st.markdown("**견적 담기**")
+    # --- [메인] 리스트 뷰 (순서 변경: 브랜드 -> 품번 -> 원산지 ⭐) ---
+    # 헤더(제목줄) 배치
+    h1, h2, h3, h4, h5, h6, h7 = st.columns([1.5, 2, 1.2, 1.8, 1, 1.2, 2])
+    with h1: st.markdown("**브랜드 (Brand)**")
+    with h2: st.markdown("**품명 (Part No.)**")
+    with h3: st.markdown("**원산지**")
+    with h4: st.markdown("**제품상태**")
+    with h5: st.markdown("**수량**")
+    with h6: st.markdown("**사진**")
+    with h7: st.markdown("**수량 선택 및 담기**")
     st.divider()
 
-    # 리스트 데이터 뿌리기
     for i, item in enumerate(filtered_items):
         date, p_id, b_name, origin, qty, condition, links_str = item
-        
         img_links = [link.strip() for link in links_str.split(',') if link.strip()]
         
-        # 5칸으로 나누어서 정보 배치
-        col1, col2, col3, col4, col5 = st.columns([2, 2, 2, 1.5, 1.5])
+        # 데이터 행(Row) 배치 (순서 변경 ⭐)
+        col1, col2, col3, col4, col5, col6, col7 = st.columns([1.5, 2, 1.2, 1.8, 1, 1.2, 2])
         
-        with col1:
-            st.write(f"**{p_id}**")
-        with col2:
-            st.write(f"{b_name} / {origin}")
-        with col3:
-            st.write(f"{condition} ({qty}개)")
+        with col1: st.write(b_name)
+        with col2: st.write(f"**{p_id}**")
+        with col3: st.write(origin)
+        with col4: st.write(condition)
+        with col5: st.write(f"{qty}")
             
-        with col4:
-            # 사진이 있으면 '팝업(Popover)' 버튼을 생성!
+        with col6:
             if img_links:
-                with st.popover("📸 사진 보기"):
-                    # 팝업 창 안에서 사진들을 보여줍니다.
+                with st.popover("📸"):
                     for img in img_links:
                         st.image(img, use_container_width=True)
             else:
-                st.write("사진 없음")
+                st.write("-")
                 
-        with col5:
-            # 장바구니 버튼
-            if st.button("🛒 담기", key=f"btn_{i}_{p_id}"):
-                st.session_state.customer_cart.append(p_id)
-                st.toast(f"[{p_id}] 장바구니에 담겼습니다! 💖")
+        with col7:
+            # 수량 선택 및 담기
+            max_q = None
+            try:
+                max_q = int(qty)
+            except:
+                pass
+            
+            sub_col1, sub_col2 = st.columns([1, 1.2])
+            with sub_col1:
+                selected_qty = st.number_input("수량", min_value=1, max_value=max_q, value=1, key=f"qty_{i}_{p_id}", label_visibility="collapsed")
+            with sub_col2:
+                if st.button("🛒 담기", key=f"btn_{i}_{p_id}", use_container_width=True):
+                    st.session_state.customer_cart[p_id] = st.session_state.customer_cart.get(p_id, 0) + selected_qty
+                    st.toast(f"[{p_id}] {selected_qty}개 추가 완료!")
                 
-        # 줄 구분선 (옅은 회색 선)
-        st.markdown("<hr style='margin: 0px; border-top: 1px solid #ddd;'>", unsafe_allow_html=True)
+        st.markdown("<hr style='margin: 0px; border-top: 1px solid #eee;'>", unsafe_allow_html=True)
 
 # --- [사이드바] 견적 장바구니 & 발송 폼 ---
 with st.sidebar:
     st.header("🛒 내 견적 바구니")
     
     if len(st.session_state.customer_cart) > 0:
-        unique_cart = list(set(st.session_state.customer_cart))
+        for p, q in st.session_state.customer_cart.items():
+            st.write(f"✔️ **{p}** : {q}개")
+            
+        st.write(f"**총 {len(st.session_state.customer_cart)}개 품목**")
         
-        for p in unique_cart:
-            st.write(f"✔️ {p}")
-        st.write(f"**총 {len(unique_cart)}개 품목**")
-        
-        if st.button("🗑️ 바구니 비우기"):
-            st.session_state.customer_cart = []
+        if st.button("🗑️ 바구니 비우기", use_container_width=True):
+            st.session_state.customer_cart = {}
             st.rerun()
             
         st.divider()
         
         st.subheader("✉️ 견적 문의하기")
         with st.form("inquiry_form"):
-            buyer_name = st.text_input("회사명 / 담당자명 (필수)")
-            buyer_contact = st.text_input("이메일 또는 연락처 (필수)")
-            buyer_msg = st.text_area("남기실 말씀 (선택)", placeholder="수량이나 배송 관련 등 추가 문의사항을 적어주세요.")
+            buyer_name = st.text_input("회사명 / 담당자명")
+            buyer_contact = st.text_input("이메일 또는 연락처")
+            buyer_msg = st.text_area("추가 문의사항")
             
-            submit_btn = st.form_submit_button("🚀 이 목록으로 견적 발송", type="primary", use_container_width=True)
+            submit_btn = st.form_submit_button("🚀 견적 발송", type="primary", use_container_width=True)
             
             if submit_btn:
                 if not buyer_name or not buyer_contact:
-                    st.error("회사명과 연락처를 꼭 입력해 주세요!")
+                    st.error("필수 정보를 입력해 주세요!")
                 else:
-                    with st.spinner("견적 문의를 전송하는 중입니다..."):
+                    with st.spinner("발송 중..."):
                         try:
                             client = get_gspread_client()
                             worksheet_inquiry = client.open_by_url(SHEET_URL).get_worksheet(2)
-                            
                             now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                            items_str = ", ".join(unique_cart) 
-                            
+                            items_str = ", ".join([f"{p}({q}개)" for p, q in st.session_state.customer_cart.items()]) 
                             worksheet_inquiry.append_row([now, buyer_name, buyer_contact, items_str, buyer_msg])
                             
-                            st.session_state.customer_cart = []
+                            st.session_state.customer_cart = {}
                             st.session_state.inquiry_success = True
                             st.rerun()
-                            
                         except Exception as e:
-                            st.error(f"전송 실패: 구글 시트 3번째 탭(견적문의함)이 만들어져 있는지 확인해주세요! ({e})")
+                            st.error(f"오류 발생: {e}")
     else:
-        st.info("원하시는 베어링을 장바구니에 담아주세요.")
+        st.info("견적 받을 품목을 담아주세요.")
