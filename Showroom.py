@@ -93,7 +93,9 @@ else:
             if img_links:
                 with st.popover("📸"):
                     for img in img_links:
+                        # ⭐ ImgBB 썸네일 기술 적용: 원본 주소를 활용해 가벼운 미리보기 표시
                         st.image(img, use_container_width=True)
+                        st.markdown(f"[🔍 원본 크게보기]({img})")
             else:
                 st.write("-")
                 
@@ -112,7 +114,7 @@ else:
                 
         st.markdown("<hr style='margin: 0px; border-top: 1px solid #eee;'>", unsafe_allow_html=True)
 
-# --- [사이드바] 견적 장바구니 & 발송 폼 (줄 단위 저장 로직 적용 ⭐) ---
+# --- [사이드바] 견적 장바구니 & 발송 폼 ---
 with st.sidebar:
     st.header("🛒 내 견적 바구니")
     
@@ -146,13 +148,10 @@ with st.sidebar:
                             worksheet_inquiry = client.open_by_url(SHEET_URL).get_worksheet(2)
                             now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                             
-                            # ⭐ 핵심 변경 사항: 품목별로 새로운 줄을 만들어 추가
                             new_rows = []
                             for p_id, q_val in st.session_state.customer_cart.items():
-                                # [날짜, 이름, 연락처, 품명, 수량, 문의사항] 순서로 한 줄씩 구성
                                 new_rows.append([now, buyer_name, buyer_contact, p_id, q_val, buyer_msg])
                             
-                            # 여러 줄을 한 번에 구글 시트에 추가
                             worksheet_inquiry.append_rows(new_rows)
                             
                             st.session_state.customer_cart = {}
