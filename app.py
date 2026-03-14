@@ -6,7 +6,8 @@ from google.oauth2.service_account import Credentials
 from datetime import datetime
 
 # 1. API 키 및 모델 설정
-GOOGLE_API_KEY = "AIzaSyB2LSjiygFfiFRJujOyg2Wo5_bYNUswDt4"
+# 클라우드 비밀 금고(secrets)에서 GEMINI_API_KEY라는 이름의 열쇠를 가져옵니다.
+GOOGLE_API_KEY = st.secrets["GEMINI_API_KEY"]
 MODEL_NAME = 'models/gemini-2.5-flash'
 genai.configure(api_key=GOOGLE_API_KEY)
 
