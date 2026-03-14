@@ -55,7 +55,6 @@ items = load_data()
 if not items:
     st.info("현재 등록된 재고가 없습니다.")
 else:
-    # --- [상단] 통합 검색 필터 ---
     search_query = st.text_input("🔍 브랜드, 품번 또는 원산지로 검색해보세요", placeholder="예: NSK, 6204, JAPAN...")
     
     filtered_items = []
@@ -67,8 +66,7 @@ else:
     st.write(f"총 **{len(filtered_items)}**개의 상품이 있습니다.")
     st.divider()
 
-    # --- [메인] 리스트 뷰 (순서 변경: 브랜드 -> 품번 -> 원산지 ⭐) ---
-    # 헤더(제목줄) 배치
+    # --- [메인] 리스트 뷰 ---
     h1, h2, h3, h4, h5, h6, h7 = st.columns([1.5, 2, 1.2, 1.8, 1, 1.2, 2])
     with h1: st.markdown("**브랜드 (Brand)**")
     with h2: st.markdown("**품명 (Part No.)**")
@@ -83,7 +81,6 @@ else:
         date, p_id, b_name, origin, qty, condition, links_str = item
         img_links = [link.strip() for link in links_str.split(',') if link.strip()]
         
-        # 데이터 행(Row) 배치 (순서 변경 ⭐)
         col1, col2, col3, col4, col5, col6, col7 = st.columns([1.5, 2, 1.2, 1.8, 1, 1.2, 2])
         
         with col1: st.write(b_name)
@@ -101,12 +98,9 @@ else:
                 st.write("-")
                 
         with col7:
-            # 수량 선택 및 담기
             max_q = None
-            try:
-                max_q = int(qty)
-            except:
-                pass
+            try: max_q = int(qty)
+            except: pass
             
             sub_col1, sub_col2 = st.columns([1, 1.2])
             with sub_col1:
@@ -114,11 +108,11 @@ else:
             with sub_col2:
                 if st.button("🛒 담기", key=f"btn_{i}_{p_id}", use_container_width=True):
                     st.session_state.customer_cart[p_id] = st.session_state.customer_cart.get(p_id, 0) + selected_qty
-                    st.toast(f"[{p_id}] {selected_qty}개 추가 완료!")
+                    st.toast(f"[{p_id}] {selected_qty}개 추가!")
                 
         st.markdown("<hr style='margin: 0px; border-top: 1px solid #eee;'>", unsafe_allow_html=True)
 
-# --- [사이드바] 견적 장바구니 & 발송 폼 ---
+# --- [사이드바] 견적 장바구니 & 발송 폼 (줄 단위 저장 로직 적용 ⭐) ---
 with st.sidebar:
     st.header("🛒 내 견적 바구니")
     
@@ -151,8 +145,15 @@ with st.sidebar:
                             client = get_gspread_client()
                             worksheet_inquiry = client.open_by_url(SHEET_URL).get_worksheet(2)
                             now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                            items_str = ", ".join([f"{p}({q}개)" for p, q in st.session_state.customer_cart.items()]) 
-                            worksheet_inquiry.append_row([now, buyer_name, buyer_contact, items_str, buyer_msg])
+                            
+                            # ⭐ 핵심 변경 사항: 품목별로 새로운 줄을 만들어 추가
+                            new_rows = []
+                            for p_id, q_val in st.session_state.customer_cart.items():
+                                # [날짜, 이름, 연락처, 품명, 수량, 문의사항] 순서로 한 줄씩 구성
+                                new_rows.append([now, buyer_name, buyer_contact, p_id, q_val, buyer_msg])
+                            
+                            # 여러 줄을 한 번에 구글 시트에 추가
+                            worksheet_inquiry.append_rows(new_rows)
                             
                             st.session_state.customer_cart = {}
                             st.session_state.inquiry_success = True
