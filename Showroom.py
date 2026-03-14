@@ -3,8 +3,19 @@ import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
 
-# --- 1. 기본 설정 ---
-st.set_page_config(page_title="Surplus Bearings Warehouse", layout="wide", initial_sidebar_state="expanded")
+# --- 1. 기본 설정 및 디자인 숨기기 ⭐ ---
+st.set_page_config(page_title="Surplus Bearings Warehouse", layout="wide")
+
+# 우측 상단 메뉴, 고양이(GitHub) 아이콘, 하단 'Made with Streamlit' 싹 다 숨기기
+hide_st_style = """
+            <style>
+            #MainMenu {visibility: hidden;}
+            header {visibility: hidden;}
+            footer {visibility: hidden;}
+            .viewerBadge_container__1QS1n {display: none;}
+            </style>
+            """
+st.markdown(hide_st_style, unsafe_allow_html=True)
 
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1cPeCqb2_Bq5ddG_UmS8L0wcR-8oNI3m7-nNC-dTDXBI/edit#gid=0"
 
