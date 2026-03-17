@@ -6,7 +6,7 @@ from google.oauth2.service_account import Credentials
 from datetime import datetime
 import requests
 import base64
-import io  # ⭐ 모바일 사진 압축을 위해 새로 추가된 필수 부품!
+import io
 
 # --- 1. 기본 설정 ---
 GOOGLE_API_KEY = st.secrets["GEMINI_API_KEY"]
@@ -24,40 +24,43 @@ def get_gspread_client():
     creds = Credentials.from_service_account_info(secret_dict, scopes=scopes)
     return gspread.authorize(creds)
 
-# --- 3. ImgBB 초고속 사진 업로드 (자동 압축 기능 추가) ---
+# --- 3. ImgBB 초고속 사진 업로드 (자동 압축 및 커서 리셋 추가) ---
 def compress_image(file_obj):
     """휴대폰의 거대한 사진을 웹용으로 가볍게 줄여주는 함수"""
-    img = Image.open(file_obj)
-    
-    # PNG 등 투명 배경이거나 특수 형식일 경우 기본 RGB(JPG)로 변환
-    if img.mode in ("RGBA", "P"):
-        img = img.convert("RGB")
+    try:
+        file_obj.seek(0) # ⭐ 핵심 1: 파일 커서를 맨 앞으로!
+        img = Image.open(file_obj)
         
-    # 사진 크기 줄이기 (가로/세로 최대 1024px로 맞춤 - AI 판독과 웹 표시에 충분함)
-    img.thumbnail((1024, 1024))
-    
-    # 가벼워진 사진을 메모리에 임시 저장
-    output = io.BytesIO()
-    img.save(output, format="JPEG", quality=85)
-    output.seek(0)
-    return output
+        # PNG 등 투명 배경이거나 특수 형식일 경우 기본 RGB(JPG)로 변환
+        if img.mode in ("RGBA", "P"):
+            img = img.convert("RGB")
+            
+        # 사진 크기 줄이기
+        img.thumbnail((1024, 1024))
+        
+        output = io.BytesIO()
+        img.save(output, format="JPEG", quality=85)
+        output.seek(0)
+        return output
+    except Exception as e:
+        # ⭐ 핵심 2: 아이폰 HEIC 등 압축이 불가한 형태면 원본을 그대로 통과시킵니다!
+        file_obj.seek(0)
+        return file_obj
 
 def upload_to_imgbb(file_obj):
     url = "https://api.imgbb.com/1/upload"
-    
-    # ⭐ 업로드 직전에 사진을 가볍게 압축!
-    compressed_file = compress_image(file_obj)
-    
-    payload = {
-        "key": IMGBB_API_KEY,
-        "image": base64.b64encode(compressed_file.getvalue()).decode("utf-8")
-    }
     try:
+        compressed_file = compress_image(file_obj)
+        
+        payload = {
+            "key": IMGBB_API_KEY,
+            "image": base64.b64encode(compressed_file.getvalue()).decode("utf-8")
+        }
         res = requests.post(url, data=payload)
+        
         if res.status_code == 200:
             return res.json()["data"]["url"]
         else:
-            # 실패 원인을 화면에 띄워주는 마법의 코드
             st.error(f"사진 업로드 실패 (코드 {res.status_code}): {res.text}")
             return None
     except Exception as e:
@@ -95,6 +98,7 @@ with tab1:
             if uploaded_files:
                 with st.spinner("AI가 품번/브랜드/원산지를 판독 중입니다... 🧐"):
                     try:
+                        uploaded_files[0].seek(0) # ⭐ 핵심 3: AI 분석 전에도 커서를 맨 앞으로!
                         img = Image.open(uploaded_files[0])
                         model = genai.GenerativeModel(MODEL_NAME)
                         prompt = "이 사진 속 베어링의 품번(Part Number), 브랜드(Brand), 원산지(Origin/Made in)를 찾아서 '품번: [값], 브랜드: [값], 원산지: [값]' 형식으로 답해줘. 안 보이면 '미확인'으로 해줘."
@@ -113,7 +117,7 @@ with tab1:
                         st.session_state.ai_done = True
                         st.rerun()
                     except Exception as e:
-                        st.error(f"분석 오류: {e}")
+                        st.error(f"분석 오류: {e} (아이폰인 경우 카메라 설정에서 '높은 호환성'으로 변경해주세요!)")
             else:
                 st.warning("사진을 먼저 올려주세요!")
                 
@@ -163,7 +167,6 @@ with tab1:
             with st.spinner("구글 시트에 기록 중..."):
                 try:
                     client = get_gspread_client()
-                    # ⭐ 0번(첫 번째) 시트 탭에 저장합니다!
                     worksheet = client.open_by_url(SHEET_URL).get_worksheet(0)
                     rows_to_insert = []
                     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -186,7 +189,6 @@ with tab2:
     
     try:
         client = get_gspread_client()
-        # ⭐ 1번(두 번째) 시트 탭에서 데이터를 읽어옵니다!
         worksheet_master = client.open_by_url(SHEET_URL).get_worksheet(1)
         all_part_numbers = worksheet_master.col_values(2)[1:] 
         valid_part_numbers = sorted(list(set([p for p in all_part_numbers if p.strip()])))
@@ -210,7 +212,6 @@ with tab2:
                                 if link: links.append(link)
                             links_str = ",\n".join(links)
                             
-                            # ⭐ 1번(두 번째) 시트 탭에서 품번을 찾고 덮어씁니다!
                             cell = worksheet_master.find(search_part, in_column=2)
                             if cell:
                                 worksheet_master.update_cell(cell.row, 7, links_str)
