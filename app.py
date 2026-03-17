@@ -24,18 +24,15 @@ def get_gspread_client():
     creds = Credentials.from_service_account_info(secret_dict, scopes=scopes)
     return gspread.authorize(creds)
 
-# --- 3. ImgBB 초고속 사진 업로드 (자동 압축 및 커서 리셋 추가) ---
+# --- 3. ImgBB 초고속 사진 업로드 (자동 압축 및 철통 보안 추가) ---
 def compress_image(file_obj):
-    """휴대폰의 거대한 사진을 웹용으로 가볍게 줄여주는 함수"""
     try:
-        file_obj.seek(0) # ⭐ 핵심 1: 파일 커서를 맨 앞으로!
+        file_obj.seek(0)
         img = Image.open(file_obj)
         
-        # PNG 등 투명 배경이거나 특수 형식일 경우 기본 RGB(JPG)로 변환
         if img.mode in ("RGBA", "P"):
             img = img.convert("RGB")
             
-        # 사진 크기 줄이기
         img.thumbnail((1024, 1024))
         
         output = io.BytesIO()
@@ -43,7 +40,6 @@ def compress_image(file_obj):
         output.seek(0)
         return output
     except Exception as e:
-        # ⭐ 핵심 2: 아이폰 HEIC 등 압축이 불가한 형태면 원본을 그대로 통과시킵니다!
         file_obj.seek(0)
         return file_obj
 
@@ -56,7 +52,13 @@ def upload_to_imgbb(file_obj):
             "key": IMGBB_API_KEY,
             "image": base64.b64encode(compressed_file.getvalue()).decode("utf-8")
         }
-        res = requests.post(url, data=payload)
+        
+        # ⭐ 핵심 1: ImgBB 서버가 스팸 로봇으로 오해하지 않도록 '일반 브라우저' 위장 헤더 추가
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        }
+        
+        res = requests.post(url, data=payload, headers=headers)
         
         if res.status_code == 200:
             return res.json()["data"]["url"]
@@ -91,14 +93,15 @@ with tab1:
     st.subheader("1. 사진 업로드 및 판독")
     
     current_key = str(st.session_state.reset_key)
-    uploaded_files = st.file_uploader("다각도 사진 업로드 (여러 장 가능)", type=['jpg', 'jpeg', 'png', 'heic'], accept_multiple_files=True, key=f"files_{current_key}")
+    # ⭐ 핵심 2: 'heic'를 삭제하여 아이폰이 강제로 JPG로 자동 변환해서 올리도록 유도!
+    uploaded_files = st.file_uploader("다각도 사진 업로드 (여러 장 가능)", type=['jpg', 'jpeg', 'png'], accept_multiple_files=True, key=f"files_{current_key}")
     
     if not st.session_state.ai_done:
         if st.button("🤖 AI 분석 시작", use_container_width=True):
             if uploaded_files:
                 with st.spinner("AI가 품번/브랜드/원산지를 판독 중입니다... 🧐"):
                     try:
-                        uploaded_files[0].seek(0) # ⭐ 핵심 3: AI 분석 전에도 커서를 맨 앞으로!
+                        uploaded_files[0].seek(0)
                         img = Image.open(uploaded_files[0])
                         model = genai.GenerativeModel(MODEL_NAME)
                         prompt = "이 사진 속 베어링의 품번(Part Number), 브랜드(Brand), 원산지(Origin/Made in)를 찾아서 '품번: [값], 브랜드: [값], 원산지: [값]' 형식으로 답해줘. 안 보이면 '미확인'으로 해줘."
@@ -200,7 +203,8 @@ with tab2:
         search_part = st.selectbox("품번 검색 및 선택", options=["-- 품번을 선택하세요 --"] + valid_part_numbers)
         
         if search_part != "-- 품번을 선택하세요 --":
-            match_files = st.file_uploader(f"[{search_part}] 제품 사진 업로드", type=['jpg', 'jpeg', 'png', 'heic'], accept_multiple_files=True, key="match_files")
+            # ⭐ 핵심 2 적용
+            match_files = st.file_uploader(f"[{search_part}] 제품 사진 업로드", type=['jpg', 'jpeg', 'png'], accept_multiple_files=True, key="match_files")
             
             if st.button("📸 사진 매칭 및 시트 덮어쓰기", type="primary", use_container_width=True):
                 if match_files:
