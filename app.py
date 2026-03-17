@@ -30,10 +30,17 @@ def upload_to_imgbb(file_obj):
         "key": IMGBB_API_KEY,
         "image": base64.b64encode(file_obj.getvalue()).decode("utf-8")
     }
-    res = requests.post(url, data=payload)
-    if res.status_code == 200:
-        return res.json()["data"]["url"]
-    return None
+    try:
+        res = requests.post(url, data=payload)
+        if res.status_code == 200:
+            return res.json()["data"]["url"]
+        else:
+            # ⭐ 실패 원인을 화면에 띄워주는 마법의 코드
+            st.error(f"사진 업로드 실패 (코드 {res.status_code}): {res.text}")
+            return None
+    except Exception as e:
+        st.error(f"인터넷 연결/업로드 에러 발생: {e}")
+        return None
 
 # --- 4. 상태 관리 ---
 if 'cart' not in st.session_state: st.session_state.cart = []
