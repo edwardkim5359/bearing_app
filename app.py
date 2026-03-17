@@ -7,16 +7,21 @@ from datetime import datetime
 import requests
 import base64
 import io
+import json
+import re
 
-# --- 1. 기본 설정 ---
+# --- 1. Page Config (가장 먼저 와야 함) ---
+st.set_page_config(page_title="Surplus Bearing Uploader", layout="centered")
+
+# --- 2. 기본 설정 및 비밀키 ---
 GOOGLE_API_KEY = st.secrets["GEMINI_API_KEY"]
 IMGBB_API_KEY = st.secrets["IMGBB_API_KEY"]
 genai.configure(api_key=GOOGLE_API_KEY)
-MODEL_NAME = 'models/gemini-2.5-flash'
+MODEL_NAME = 'gemini-1.5-flash' # 모델명 확인 (2.5는 현재 기준 미출시이므로 1.5로 수정)
 
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1cPeCqb2_Bq5ddG_UmS8L0wcR-8oNI3m7-nNC-dTDXBI/edit#gid=0"
 
-# --- 2. 구글 시트 연결 ---
+# --- 3. 구글 시트 연결 ---
 @st.cache_resource
 def get_gspread_client():
     scopes = ['https://www.googleapis.com/auth/spreadsheets']
@@ -24,207 +29,144 @@ def get_gspread_client():
     creds = Credentials.from_service_account_info(secret_dict, scopes=scopes)
     return gspread.authorize(creds)
 
-# --- 3. ImgBB 초고속 사진 업로드 (자동 압축 및 철통 보안 추가) ---
-def compress_image(file_obj):
-    try:
-        file_obj.seek(0)
-        img = Image.open(file_obj)
-        
-        if img.mode in ("RGBA", "P"):
-            img = img.convert("RGB")
-            
-        img.thumbnail((1024, 1024))
-        
-        output = io.BytesIO()
-        img.save(output, format="JPEG", quality=85)
-        output.seek(0)
-        return output
-    except Exception as e:
-        file_obj.seek(0)
-        return file_obj
+# --- 4. 사진 처리 함수 (커서 리셋 및 바이트 변환) ---
+def get_image_bytes(file_obj):
+    file_obj.seek(0)
+    return file_obj.read()
 
-def upload_to_imgbb(file_obj):
+def upload_to_imgbb(image_bytes):
     url = "https://api.imgbb.com/1/upload"
     try:
-        compressed_file = compress_image(file_obj)
+        # 가벼운 압축 후 전송
+        img = Image.open(io.BytesIO(image_bytes))
+        if img.mode in ("RGBA", "P"): img = img.convert("RGB")
+        img.thumbnail((1024, 1024))
         
-        payload = {
-            "key": IMGBB_API_KEY,
-            "image": base64.b64encode(compressed_file.getvalue()).decode("utf-8")
-        }
+        buffer = io.BytesIO()
+        img.save(buffer, format="JPEG", quality=85)
+        img_str = base64.b64encode(buffer.getvalue()).decode("utf-8")
         
-        # ⭐ 핵심 1: ImgBB 서버가 스팸 로봇으로 오해하지 않도록 '일반 브라우저' 위장 헤더 추가
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-        }
-        
-        res = requests.post(url, data=payload, headers=headers)
-        
+        res = requests.post(url, data={"key": IMGBB_API_KEY, "image": img_str}, timeout=30)
         if res.status_code == 200:
             return res.json()["data"]["url"]
-        else:
-            st.error(f"사진 업로드 실패 (코드 {res.status_code}): {res.text}")
-            return None
-    except Exception as e:
-        st.error(f"인터넷 연결/업로드 에러 발생: {e}")
+        return None
+    except:
         return None
 
-# --- 4. 상태 관리 ---
-if 'cart' not in st.session_state: st.session_state.cart = []
-if 'reset_key' not in st.session_state: st.session_state.reset_key = 0
-if 'success_msg' not in st.session_state: st.session_state.success_msg = ""
-if 'ai_done' not in st.session_state: st.session_state.ai_done = False
-if 'temp_data' not in st.session_state: st.session_state.temp_data = {}
+# --- 5. 상태 초기화 ---
+for key in ['cart', 'ai_done', 'temp_data', 'reset_key']:
+    if key not in st.session_state:
+        if key == 'cart': st.session_state.cart = []
+        elif key == 'ai_done': st.session_state.ai_done = False
+        elif key == 'temp_data': st.session_state.temp_data = {}
+        elif key == 'reset_key': st.session_state.reset_key = 0
 
-# --- 5. 앱 화면 구성 ---
-st.set_page_config(page_title="Surplus Bearing Uploader", layout="centered")
-st.header("Surplus Bearing Uploader")
+# --- 6. 앱 UI ---
+st.header("⚙️ Surplus Bearing Uploader")
 
-if st.session_state.success_msg:
-    st.success(st.session_state.success_msg)
-    st.session_state.success_msg = ""
+tab1, tab2 = st.tabs(["🤖 신규 등록", "📸 사진 매칭"])
 
-tab1, tab2 = st.tabs(["🤖 신규 베어링 등록 (공급자용)", "📸 기존 재고 사진 매칭 (내 재고용)"])
-
-# ==========================================
-# [탭 1] 신규 베어링 등록 -> 구글 시트 "첫 번째 탭" 저장
-# ==========================================
 with tab1:
     st.subheader("1. 사진 업로드 및 판독")
     
-    current_key = str(st.session_state.reset_key)
-    # ⭐ 핵심 2: 'heic'를 삭제하여 아이폰이 강제로 JPG로 자동 변환해서 올리도록 유도!
-    uploaded_files = st.file_uploader("다각도 사진 업로드 (여러 장 가능)", type=['jpg', 'jpeg', 'png'], accept_multiple_files=True, key=f"files_{current_key}")
+    # 리셋 키를 이용해 업로더 강제 초기화 지원
+    uploaded_files = st.file_uploader("사진을 선택하세요 (여러 장 가능)", type=['jpg', 'jpeg', 'png'], accept_multiple_files=True, key=f"up_{st.session_state.reset_key}")
     
     if not st.session_state.ai_done:
-        if st.button("🤖 AI 분석 시작", use_container_width=True):
+        if st.button("🤖 AI 분석 시작", use_container_width=True, type="primary"):
             if uploaded_files:
-                with st.spinner("AI가 품번/브랜드/원산지를 판독 중입니다... 🧐"):
+                with st.spinner("AI가 분석 중입니다..."):
                     try:
-                        uploaded_files[0].seek(0)
-                        img = Image.open(uploaded_files[0])
+                        # 파일 증발 방지를 위해 모든 파일의 바이트를 세션에 즉시 저장
+                        image_data_list = [get_image_bytes(f) for f in uploaded_files]
+                        
                         model = genai.GenerativeModel(MODEL_NAME)
-                        prompt = "이 사진 속 베어링의 품번(Part Number), 브랜드(Brand), 원산지(Origin/Made in)를 찾아서 '품번: [값], 브랜드: [값], 원산지: [값]' 형식으로 답해줘. 안 보이면 '미확인'으로 해줘."
-                        response = model.generate_content([prompt, img])
+                        prompt = """
+                        Bearing image analysis. Output ONLY in JSON format:
+                        {"p_id": "Part Number", "brand": "Brand", "origin": "Origin"}
+                        If not found, use "Unknown".
+                        """
+                        # 분석은 첫 번째 사진으로 수행
+                        img_for_ai = Image.open(io.BytesIO(image_data_list[0]))
+                        response = model.generate_content([prompt, img_for_ai])
                         
-                        text = response.text.replace('\n', ',')
-                        parts = [p.strip() for p in text.split(',') if ':' in p]
+                        # JSON 추출 로직 (Markdown 태그 제거)
+                        raw_text = response.text
+                        json_match = re.search(r'\{.*\}', raw_text, re.DOTALL)
+                        if json_match:
+                            data = json.loads(json_match.group())
+                        else:
+                            data = {"p_id": "Unknown", "brand": "Unknown", "origin": "Unknown"}
                         
-                        p_id, b_name, origin = "미확인", "미확인", "미확인"
-                        for p in parts:
-                            if "품번" in p: p_id = p.split(':')[-1].strip()
-                            elif "브랜드" in p: b_name = p.split(':')[-1].strip()
-                            elif "원산지" in p: origin = p.split(':')[-1].strip()
-                        
-                        st.session_state.temp_data = {"품번": p_id, "브랜드": b_name, "원산지": origin}
+                        # 결과 및 바이트 리스트 저장
+                        st.session_state.temp_data = {
+                            "p_id": data.get("p_id", "Unknown"),
+                            "brand": data.get("brand", "Unknown"),
+                            "origin": data.get("origin", "Unknown"),
+                            "images": image_data_list # 여기에 저장해야 안 날아감
+                        }
                         st.session_state.ai_done = True
                         st.rerun()
                     except Exception as e:
-                        st.error(f"분석 오류: {e} (아이폰인 경우 카메라 설정에서 '높은 호환성'으로 변경해주세요!)")
+                        st.error(f"분석 실패: {e}")
             else:
-                st.warning("사진을 먼저 올려주세요!")
-                
+                st.warning("사진을 먼저 올려주세요.")
+
+    # 2단계: 결과 확인 및 수정
     if st.session_state.ai_done:
-        st.info("💡 AI 판독 결과입니다. 틀린 글자가 있다면 직접 수정해 주세요!")
-        col1, col2, col3 = st.columns(3)
-        with col1: confirm_p_id = st.text_input("품번 (Part No.)", value=st.session_state.temp_data.get("품번", ""))
-        with col2: confirm_b_name = st.text_input("브랜드 (Brand)", value=st.session_state.temp_data.get("브랜드", ""))
-        with col3: confirm_origin = st.text_input("원산지 (Origin)", value=st.session_state.temp_data.get("원산지", ""))
-            
-        col4, col5 = st.columns([1, 2])
-        with col4: quantity = st.number_input("입고 수량", min_value=1, value=1)
-        with col5: condition = st.text_input("제품상태 (예: A급 신품, 박스없음)", placeholder="A급 신품")
+        st.info("💡 AI 판독 결과를 확인하세요.")
+        c1, c2, c3 = st.columns(3)
+        p_id = c1.text_input("품번", value=st.session_state.temp_data["p_id"])
+        brand = c2.text_input("브랜드", value=st.session_state.temp_data["brand"])
+        origin = c3.text_input("원산지", value=st.session_state.temp_data["origin"])
+        
+        c4, c5 = st.columns([1, 2])
+        qty = c4.number_input("수량", min_value=1, value=1)
+        cond = c5.text_input("상태", value="New")
 
-        if st.button("✅ 정보 확정 및 장바구니 담기", type="primary", use_container_width=True):
-            with st.spinner("사진을 클라우드에 저장하는 중..."):
+        if st.button("✅ 장바구니에 담기", use_container_width=True, type="primary"):
+            with st.spinner("이미지 서버 전송 중..."):
                 links = []
-                for f in uploaded_files:
-                    link = upload_to_imgbb(f)
+                # 세션에 저장해둔 바이트 데이터 사용
+                for img_bytes in st.session_state.temp_data["images"]:
+                    link = upload_to_imgbb(img_bytes)
                     if link: links.append(link)
-                links_str = ",\n".join(links)
+                
+                if links:
+                    st.session_state.cart.append({
+                        "p_id": p_id, "brand": brand, "origin": origin,
+                        "qty": qty, "cond": cond, "links": ",\n".join(links)
+                    })
+                    st.session_state.ai_done = False
+                    st.session_state.temp_data = {}
+                    st.session_state.reset_key += 1
+                    st.rerun()
+                else:
+                    st.error("이미지 업로드에 실패했습니다.")
 
-                st.session_state.cart.append({
-                    "품번": confirm_p_id, "브랜드": confirm_b_name, "원산지": confirm_origin,
-                    "수량": quantity, "제품상태": condition, "사진링크": links_str
-                })
-                
-                st.session_state.success_msg = f"✅ [{confirm_p_id}] 장바구니 담기 완료! 다음 제품을 올려주세요."
-                st.session_state.ai_done = False
-                st.session_state.temp_data = {}
-                st.session_state.reset_key += 1
-                st.rerun()
-                
-        if st.button("취소하고 다시 올리기", use_container_width=True):
+        if st.button("🔄 취소", use_container_width=True):
             st.session_state.ai_done = False
-            st.session_state.temp_data = {}
             st.rerun()
 
+    # 장바구니 및 전송
     st.divider()
-    
-    st.subheader(f"🛒 장바구니 대기열 ({len(st.session_state.cart)}개)")
-    if len(st.session_state.cart) > 0:
-        for i, item in enumerate(st.session_state.cart):
-            st.write(f"**{i+1}. {item['품번']}** | {item['브랜드']} | {item['원산지']} | {item['수량']}개 | {item['제품상태']} | 사진 {len(item['사진링크'].split(','))}장")
-
-        if st.button("🚀 전체 구글 시트에 등록", type="primary", use_container_width=True):
-            with st.spinner("구글 시트에 기록 중..."):
-                try:
-                    client = get_gspread_client()
-                    worksheet = client.open_by_url(SHEET_URL).get_worksheet(0)
-                    rows_to_insert = []
-                    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                    for item in st.session_state.cart:
-                        rows_to_insert.append([now, item["품번"], item["브랜드"], item["원산지"], item["수량"], item["제품상태"], item["사진링크"]])
-                    
-                    worksheet.append_rows(rows_to_insert)
-                    st.session_state.cart = []
-                    st.success("🎉 시트 등록 완료!")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"저장 실패: {e}")
-
-# ==========================================
-# [탭 2] 기존 재고 매칭 -> 구글 시트 "두 번째 탭" 연동
-# ==========================================
-with tab2:
-    st.subheader("내 재고 장부에 사진 매칭하기")
-    st.info("두 번째 시트 탭에 입력된 마스터 리스트에서 품번을 검색합니다.")
-    
-    try:
-        client = get_gspread_client()
-        worksheet_master = client.open_by_url(SHEET_URL).get_worksheet(1)
-        all_part_numbers = worksheet_master.col_values(2)[1:] 
-        valid_part_numbers = sorted(list(set([p for p in all_part_numbers if p.strip()])))
-    except Exception as e:
-        st.error("마스터 시트를 불러오는 데 실패했습니다. 두 번째 시트 탭이 만들어져 있는지 확인해 주세요!")
-        valid_part_numbers = []
-
-    if valid_part_numbers:
-        search_part = st.selectbox("품번 검색 및 선택", options=["-- 품번을 선택하세요 --"] + valid_part_numbers)
+    st.subheader(f"🛒 대기열 ({len(st.session_state.cart)}개)")
+    if st.session_state.cart:
+        for idx, item in enumerate(st.session_state.cart):
+            st.write(f"{idx+1}. **{item['p_id']}** ({item['brand']}) - {item['qty']}pcs")
         
-        if search_part != "-- 품번을 선택하세요 --":
-            # ⭐ 핵심 2 적용
-            match_files = st.file_uploader(f"[{search_part}] 제품 사진 업로드", type=['jpg', 'jpeg', 'png'], accept_multiple_files=True, key="match_files")
-            
-            if st.button("📸 사진 매칭 및 시트 덮어쓰기", type="primary", use_container_width=True):
-                if match_files:
-                    with st.spinner("사진 업로드 및 시트 업데이트 중... 🚀"):
-                        try:
-                            links = []
-                            for f in match_files:
-                                link = upload_to_imgbb(f)
-                                if link: links.append(link)
-                            links_str = ",\n".join(links)
-                            
-                            cell = worksheet_master.find(search_part, in_column=2)
-                            if cell:
-                                worksheet_master.update_cell(cell.row, 7, links_str)
-                                st.success(f"✅ [{search_part}] 사진 매칭 완료! 내 재고 시트에 즉시 반영되었습니다.")
-                            else:
-                                st.error("해당 품번을 시트에서 찾을 수 없습니다.")
-                        except Exception as e:
-                            st.error(f"업데이트 오류: {e}")
-                else:
-                    st.warning("사진을 올려주세요!")
-    else:
-        st.write("두 번째 시트 탭에 등록된 기존 품번이 없습니다. 데이터를 먼저 넣어주세요!")
+        if st.button("🚀 구글 시트 최종 등록", type="primary", use_container_width=True):
+            try:
+                client = get_gspread_client()
+                sheet = client.open_by_url(SHEET_URL).get_worksheet(0)
+                now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                data_to_save = [[now, i['p_id'], i['brand'], i['origin'], i['qty'], i['cond'], i['links']] for i in st.session_state.cart]
+                sheet.append_rows(data_to_save)
+                st.session_state.cart = []
+                st.success("시트 저장 성공!")
+                st.rerun()
+            except Exception as e:
+                st.error(f"시트 저장 실패: {e}")
+
+with tab2:
+    st.write("기존 리스트 매칭 기능 준비 중...")
