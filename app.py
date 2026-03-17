@@ -6,6 +6,7 @@ from google.oauth2.service_account import Credentials
 from datetime import datetime
 import requests
 import base64
+import io  # ⭐ 모바일 사진 압축을 위해 새로 추가된 필수 부품!
 
 # --- 1. 기본 설정 ---
 GOOGLE_API_KEY = st.secrets["GEMINI_API_KEY"]
@@ -23,19 +24,40 @@ def get_gspread_client():
     creds = Credentials.from_service_account_info(secret_dict, scopes=scopes)
     return gspread.authorize(creds)
 
-# --- 3. ImgBB 초고속 사진 업로드 함수 ---
+# --- 3. ImgBB 초고속 사진 업로드 (자동 압축 기능 추가) ---
+def compress_image(file_obj):
+    """휴대폰의 거대한 사진을 웹용으로 가볍게 줄여주는 함수"""
+    img = Image.open(file_obj)
+    
+    # PNG 등 투명 배경이거나 특수 형식일 경우 기본 RGB(JPG)로 변환
+    if img.mode in ("RGBA", "P"):
+        img = img.convert("RGB")
+        
+    # 사진 크기 줄이기 (가로/세로 최대 1024px로 맞춤 - AI 판독과 웹 표시에 충분함)
+    img.thumbnail((1024, 1024))
+    
+    # 가벼워진 사진을 메모리에 임시 저장
+    output = io.BytesIO()
+    img.save(output, format="JPEG", quality=85)
+    output.seek(0)
+    return output
+
 def upload_to_imgbb(file_obj):
     url = "https://api.imgbb.com/1/upload"
+    
+    # ⭐ 업로드 직전에 사진을 가볍게 압축!
+    compressed_file = compress_image(file_obj)
+    
     payload = {
         "key": IMGBB_API_KEY,
-        "image": base64.b64encode(file_obj.getvalue()).decode("utf-8")
+        "image": base64.b64encode(compressed_file.getvalue()).decode("utf-8")
     }
     try:
         res = requests.post(url, data=payload)
         if res.status_code == 200:
             return res.json()["data"]["url"]
         else:
-            # ⭐ 실패 원인을 화면에 띄워주는 마법의 코드
+            # 실패 원인을 화면에 띄워주는 마법의 코드
             st.error(f"사진 업로드 실패 (코드 {res.status_code}): {res.text}")
             return None
     except Exception as e:
@@ -66,7 +88,7 @@ with tab1:
     st.subheader("1. 사진 업로드 및 판독")
     
     current_key = str(st.session_state.reset_key)
-    uploaded_files = st.file_uploader("다각도 사진 업로드 (여러 장 가능)", type=['jpg', 'jpeg', 'png'], accept_multiple_files=True, key=f"files_{current_key}")
+    uploaded_files = st.file_uploader("다각도 사진 업로드 (여러 장 가능)", type=['jpg', 'jpeg', 'png', 'heic'], accept_multiple_files=True, key=f"files_{current_key}")
     
     if not st.session_state.ai_done:
         if st.button("🤖 AI 분석 시작", use_container_width=True):
@@ -176,7 +198,7 @@ with tab2:
         search_part = st.selectbox("품번 검색 및 선택", options=["-- 품번을 선택하세요 --"] + valid_part_numbers)
         
         if search_part != "-- 품번을 선택하세요 --":
-            match_files = st.file_uploader(f"[{search_part}] 제품 사진 업로드", type=['jpg', 'jpeg', 'png'], accept_multiple_files=True, key="match_files")
+            match_files = st.file_uploader(f"[{search_part}] 제품 사진 업로드", type=['jpg', 'jpeg', 'png', 'heic'], accept_multiple_files=True, key="match_files")
             
             if st.button("📸 사진 매칭 및 시트 덮어쓰기", type="primary", use_container_width=True):
                 if match_files:
