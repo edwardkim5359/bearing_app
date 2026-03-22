@@ -1,6 +1,6 @@
 streamlit
 google-genai
-pillow
+Pillow
 gspread
 google-auth
-requests
+google-api-python-client
